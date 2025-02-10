@@ -10,11 +10,18 @@ def final_transcribe(filename: str, language_code: str) -> str:
     with open(filename, "rb") as f:
         audio_content = f.read()
 
-    config = cloud_speech.RecognitionConfig(
-        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-        language_codes=[language_code],
-        model="long",
-    )
+    if language_code == "en-US":
+        config = cloud_speech.RecognitionConfig(
+            auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+            language_codes=[language_code],
+            model="latest_short",
+        )
+    else:
+        config = cloud_speech.RecognitionConfig(
+            auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+            language_codes=[language_code, "en-US"],
+            model="latest_short",
+        )
 
     request = cloud_speech.RecognizeRequest(
         recognizer=f"projects/{PROJECT_ID}/locations/global/recognizers/_",

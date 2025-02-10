@@ -7,10 +7,19 @@ import os
 import asyncio
 import threading
 from uuid import uuid4
+import vertexai
+from  vertexai.generative_models  import  GenerativeModel 
 
 
 from final_recognizer import final_transcribe
 from stream_recognizer import StreamRecognizer
+
+# GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# genai.configure(api_key=GEMINI_API_KEY)
+PROJECT_ID = os.getenv("PROJECT_ID")
+REGION = "us-central1" 
+vertexai.init(project=PROJECT_ID,  location=REGION) 
+model  =  GenerativeModel(  "gemini-1.5-pro-002"  ) 
 
 app = FastAPI()
 app.add_middleware(
@@ -28,6 +37,37 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 broadcast_clients = []
 meetings = {}
+
+@app.post("/summarize")
+async def summarize_meeting(request: Request):
+    data = await request.json()
+    meeting_text = data.get("text", "")
+
+    if not meeting_text:
+        return JSONResponse(content={"success": False, "message": "沒有會議內容"}, status_code=400)
+
+    prompt = f"""
+    你是一個專業的筆記整理助理，請根據以下的逐字稿，撰寫中文為主的摘要並以 Markdown 格式輸出：
+
+    ```
+    {meeting_text}
+    ```
+
+    ## 格式要求：
+    - 使用 **標題** 來區分不同議題
+    - 以 **條列清單** 方式整理重點
+    - 重要資訊請用 **加粗**
+    """
+    
+    print(prompt)
+
+    try:
+        response = model.generate_content(prompt)
+        markdown_text = response.text if response.text else "摘要生成失敗"
+
+        return JSONResponse(content={"success": True, "markdown": markdown_text})
+    except Exception as e:
+        return JSONResponse(content={"success": False, "message": str(e)}, status_code=500)
 
 @app.post("/create")
 async def create_meeting():
