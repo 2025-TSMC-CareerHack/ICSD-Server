@@ -6,27 +6,26 @@ class StreamRecognizer:
     def __init__(self, language_code: str, loop, broadcast_clients):
         self.language_code = language_code
         self.loop = loop
-        self.broadcast_clients = broadcast_clients
+        self.broadcast_clients = broadcast_clients  # 這是會議內部的 clients
         self.audio_queue = queue.Queue()
         self.is_running = True
 
     async def broadcast_transcript(self, transcript: str, is_final: bool):
-        """廣播轉錄結果給所有客戶端"""
-        # 只有非最終結果才廣播，最終結果由 V2 處理
-        if not is_final:
-            message = f"temp:{transcript}"
-            
-            to_remove = []
-            for client in self.broadcast_clients:
-                try:
-                    await client.send_text(message)
-                except Exception as e:
-                    print(f"廣播失敗: {e}")
-                    to_remove.append(client)
-            
-            # 移除已斷線的客戶端
-            for client in to_remove:
-                self.broadcast_clients.remove(client)
+        """只對當前會議的 clients 廣播轉錄結果"""
+        message = f"temp:{transcript}"
+        
+        to_remove = []
+        for client in self.broadcast_clients:
+            try:
+                await client.send_text(message)
+            except Exception as e:
+                print(f"廣播失敗: {e}")
+                to_remove.append(client)
+
+        # 移除已斷線的客戶端
+        for client in to_remove:
+            self.broadcast_clients.remove(client)
+
 
     def process_audio(self):
         """處理音訊串流並進行即時辨識"""

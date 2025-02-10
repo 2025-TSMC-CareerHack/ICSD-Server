@@ -6,6 +6,8 @@ import datetime
 import os
 import asyncio
 import threading
+from uuid import uuid4
+
 
 from final_recognizer import final_transcribe
 from stream_recognizer import StreamRecognizer
@@ -25,6 +27,16 @@ UPLOAD_DIR = "upload"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 broadcast_clients = []
+meetings = {}
+
+@app.post("/create")
+async def create_meeting():
+    meeting_id = str(uuid4())[:8]  # 生成簡短的 8 碼會議 ID
+    meetings[meeting_id] = {
+        "recordings": [],
+        "clients": []
+    }
+    return JSONResponse(content={"meeting_id": meeting_id})
 
 @app.post("/record/start")
 async def start_recording(request: Request):
@@ -33,19 +45,28 @@ async def start_recording(request: Request):
     recording_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + language
     return JSONResponse(content={"recording_id": recording_id})
 
-@app.websocket("/ws/record/{recording_id}")
-async def websocket_record(websocket: WebSocket, recording_id: str):
+@app.websocket("/ws/record/{meeting_id}/{recording_id}")
+async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str):
     await websocket.accept()
+    
+    if meeting_id not in meetings:
+        await websocket.close()
+        return
+    
+    meetings[meeting_id]["clients"].append(websocket)
+
     filename = f"{SAVE_DIR}/recording_{recording_id}.wav"
     wav_file = wave.open(filename, "wb")
     wav_file.setnchannels(1)
     wav_file.setsampwidth(2)
     wav_file.setframerate(16000)
-    print(f"開始接收音訊，錄音將儲存於 {filename}")
 
-    # 從 recording_id 解析語言代碼
+    # 解析語言代碼
     parts = recording_id.rsplit("_", 1)
     language_code = parts[1] if len(parts) == 2 else "en-US"
+
+    # 會議內部的 `broadcast_clients`
+    broadcast_clients = meetings[meeting_id]["clients"]
 
     # 建立即時辨識器
     loop = asyncio.get_running_loop()
@@ -64,19 +85,16 @@ async def websocket_record(websocket: WebSocket, recording_id: str):
             if "bytes" in data:
                 chunk = data["bytes"]
                 wav_file.writeframes(chunk)
-                # 將音訊資料送到即時辨識器
                 recognizer.add_audio_data(chunk)
             elif "text" in data:
                 if data["text"] == "STOP":
                     break
     except WebSocketDisconnect:
-        print("客戶端連線中斷")
+        print(f"客戶端斷開會議 {meeting_id}")
     finally:
-        # 停止即時辨識
         recognizer.stop()
         recognition_thread.join(timeout=2)
         
-        # 關閉 WAV 檔
         wav_file.close()
         print(f"錄音檔案已儲存：{filename}")
 
@@ -87,8 +105,8 @@ async def websocket_record(websocket: WebSocket, recording_id: str):
             filename, 
             language_code
         )
-        
-        # 廣播最終結果
+
+        # 廣播最終結果只給該會議室的 `clients`
         final_message = f"final:{language_code} {final_text}"
         to_remove = []
         for client in broadcast_clients:
@@ -100,6 +118,7 @@ async def websocket_record(websocket: WebSocket, recording_id: str):
         for client in to_remove:
             broadcast_clients.remove(client)
 
+
 @app.post("/record/{recording_id}/upload")
 async def upload_recording(recording_id: str, file: UploadFile = File(...)):
     upload_filename = f"{UPLOAD_DIR}/upload_recording_{recording_id}.wav"
@@ -108,19 +127,25 @@ async def upload_recording(recording_id: str, file: UploadFile = File(...)):
         f.write(content)
     return JSONResponse(content={"message": "File uploaded successfully", "filename": upload_filename})
 
-@app.websocket("/ws/broadcast")
-async def websocket_broadcast(websocket: WebSocket):
+@app.websocket("/ws/broadcast/{meeting_id}")
+async def websocket_broadcast(websocket: WebSocket, meeting_id: str):
     await websocket.accept()
-    broadcast_clients.append(websocket)
-    print("廣播 WebSocket 連線已建立")
+    
+    if meeting_id not in meetings:
+        await websocket.close()
+        return
+
+    meetings[meeting_id]["clients"].append(websocket)
+    print(f"廣播 WebSocket 連線已建立 (會議 {meeting_id})")
+
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        print("廣播客戶端連線中斷")
+        print(f"廣播客戶端斷開連線 (會議 {meeting_id})")
     finally:
-        if websocket in broadcast_clients:
-            broadcast_clients.remove(websocket)
+        meetings[meeting_id]["clients"].remove(websocket)
+
 
 if __name__ == "__main__":
     import uvicorn
