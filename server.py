@@ -102,6 +102,7 @@ async def websocket_broadcast(websocket: WebSocket):
     finally:
         if websocket in broadcast_clients:
             broadcast_clients.remove(websocket)
+            
 
 
 if __name__ == "__main__":

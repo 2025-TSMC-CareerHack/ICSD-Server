@@ -1,5 +1,5 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request, HTTPException
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import wave
 import datetime
@@ -9,6 +9,10 @@ import threading
 from uuid import uuid4
 import vertexai
 from  vertexai.generative_models  import  GenerativeModel 
+from google.oauth2 import id_token
+from google.auth.transport import requests as grequests
+from starlette.middleware.sessions import SessionMiddleware
+
 
 
 from final_recognizer import final_transcribe
@@ -20,6 +24,7 @@ PROJECT_ID = os.getenv("PROJECT_ID")
 REGION = "us-central1" 
 vertexai.init(project=PROJECT_ID,  location=REGION) 
 model  =  GenerativeModel(  "gemini-1.5-pro-002"  ) 
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 app = FastAPI()
 app.add_middleware(
@@ -29,6 +34,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+
 
 SAVE_DIR = "recordings"
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -186,6 +195,53 @@ async def websocket_broadcast(websocket: WebSocket, meeting_id: str):
     finally:
         meetings[meeting_id]["clients"].remove(websocket)
 
+@app.post("/auth/google")
+async def google_auth(request: Request):
+    data = await request.json()
+    token = data.get("credential", "").strip()
+    if not token or token == "undefined":
+        raise HTTPException(status_code=400, detail="無效的 token：前端未傳送正確的認證資料")
+    try:
+        idinfo = id_token.verify_oauth2_token(token, grequests.Request(), GOOGLE_CLIENT_ID)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"無效的 token: {str(e)}")
+    
+    user = {
+        "user_id": idinfo.get("sub"),
+        "name": idinfo.get("name"),
+        "email": idinfo.get("email"),
+        "picture": idinfo.get("picture")
+    }
+    # 將使用者資料儲存於 session 中
+    request.session["user"] = user
+    return JSONResponse(content={"message": "登入成功", "user": user})
+
+@app.get("/profile")
+async def profile(request: Request):
+    user = request.session.get("user")
+    if user:
+        return JSONResponse(content={"profile": user})
+    else:
+        raise HTTPException(status_code=401, detail="未登入")
+
+@app.post("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return JSONResponse(content={"message": "已成功登出"})
+
+
+@app.get("/")
+async def root():
+    """
+    讀取並回傳 index.html 當作首頁，
+    可在實際環境下使用 StaticFiles 模組來處理靜態資源。
+    """
+    try:
+        with open("index.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        return HTMLResponse(content="<h1>載入頁面失敗</h1>", status_code=500)
 
 if __name__ == "__main__":
     import uvicorn
