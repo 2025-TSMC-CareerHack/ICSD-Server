@@ -12,11 +12,13 @@ from  vertexai.generative_models  import  GenerativeModel
 from google.oauth2 import id_token
 from google.auth.transport import requests as grequests
 from starlette.middleware.sessions import SessionMiddleware
+import uuid
 
 
 
 from final_recognizer import final_transcribe
 from stream_recognizer import StreamRecognizer
+from mongodb_atlas import *
 
 # GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # genai.configure(api_key=GEMINI_API_KEY)
@@ -38,8 +40,11 @@ app.add_middleware(
 SECRET_KEY = os.getenv("SECRET_KEY")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
+mongo_db = None
+
 
 SAVE_DIR = "recordings"
+LOG_DIR = "logs"
 os.makedirs(SAVE_DIR, exist_ok=True)
 UPLOAD_DIR = "upload"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -157,6 +162,11 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
 
         # 廣播最終結果只給該會議室的 `clients`
         final_message = f"final:{language_code} {final_text}"
+        
+        # open file {meeying_id}.txt and write final_text
+        with open(f"{LOG_DIR}/{meeting_id}.txt", "a") as f:
+            f.write(final_text + "\n")
+        
         to_remove = []
         for client in broadcast_clients:
             try:
@@ -206,27 +216,56 @@ async def google_auth(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"無效的 token: {str(e)}")
     
+    session_id = str(uuid.uuid4())  # 生成隨機 Session ID
+
     user = {
+        "session_id": session_id,
         "user_id": idinfo.get("sub"),
         "name": idinfo.get("name"),
         "email": idinfo.get("email"),
-        "picture": idinfo.get("picture")
+        "picture": idinfo.get("picture"),
     }
-    # 將使用者資料儲存於 session 中
-    request.session["user"] = user
-    return JSONResponse(content={"message": "登入成功", "user": user})
+    
+
+    # 🗄️ 將 Session 存入 MongoDB
+    try:
+        db = mongo_db["fastapi_sessions"]
+        sessions_collection = db["sessions"]
+        insert_one(sessions_collection, user)
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"儲存 Session 失敗: {str(e)}")
+    
+    # 📝 儲存 Session 到 FastAPI 的 SessionMiddleware
+    # request.session["user"] = user
+    user["_id"] = str(user["_id"])
+    print(user)
+    return JSONResponse(content={"message": "登入成功", "session_id": session_id, "user": user})
 
 @app.get("/profile")
-async def profile(request: Request):
-    user = request.session.get("user")
-    if user:
-        return JSONResponse(content={"profile": user})
-    else:
-        raise HTTPException(status_code=401, detail="未登入")
+async def profile(request: Request, session_id: str):
+    print(session_id)
+    db = mongo_db["fastapi_sessions"]
+    sessions_collection = db["sessions"]
+    user = find_one(sessions_collection, {"session_id": session_id})
+    if not user:
+        raise HTTPException(status_code=401, detail="未授權的存取")
+    user["_id"] = str(user["_id"])
+    print(user)
+    return JSONResponse(content={"profile": user})
 
 @app.post("/logout")
-async def logout(request: Request):
+async def logout(request: Request, session_id: str):
+    print(session_id)
+    db = mongo_db["fastapi_sessions"]
+    sessions_collection = db["sessions"]
+    user = find_one(sessions_collection, {"session_id": session_id})
+    print("delete:", user)
+    if user:
+        delete_one(sessions_collection, {"session_id": session_id})
+    
     request.session.clear()
+    
     return JSONResponse(content={"message": "已成功登出"})
 
 
@@ -245,4 +284,5 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+    mongo_db = connect_to_mongodb()
     uvicorn.run(app, host="localhost", port=8765)
