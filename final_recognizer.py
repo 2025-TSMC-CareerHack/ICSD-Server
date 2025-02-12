@@ -9,18 +9,26 @@ def final_transcribe(filename: str, language_code: str) -> str:
 
     with open(filename, "rb") as f:
         audio_content = f.read()
+        
+    # 判斷語音長度有沒有超過 30 秒
+    audio_length = len(audio_content) / 32000
+    model = ""
+    if audio_length > 30:
+        model = "latest_long"
+    else:
+        model = "latest_short"
 
     if language_code == "en-US":
         config = cloud_speech.RecognitionConfig(
             auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
             language_codes=[language_code],
-            model="latest_short",
+            model=model,
         )
     else:
         config = cloud_speech.RecognitionConfig(
             auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
             language_codes=[language_code, "en-US"],
-            model="latest_short",
+            model=model,
         )
 
     request = cloud_speech.RecognizeRequest(

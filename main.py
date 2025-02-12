@@ -41,6 +41,8 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 mongo_db = None
+db = None
+session_collection = None
 
 
 SAVE_DIR = "recordings"
@@ -99,9 +101,19 @@ async def start_recording(request: Request):
     recording_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + language
     return JSONResponse(content={"recording_id": recording_id})
 
+@app.get("/log")
+async def get_log(meeting_id: str):
+    try:
+        with open(f"{LOG_DIR}/{meeting_id}.txt", "r") as f:
+            logs = f.readlines()
+        return JSONResponse(content=logs)
+    except FileNotFoundError:
+        return JSONResponse(content="")
+
 @app.websocket("/ws/record/{meeting_id}/{recording_id}")
-async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str):
+async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str, session_id: str):
     await websocket.accept()
+    user = find_one(sessions_collection, {"session_id": session_id})
     
     if meeting_id not in meetings:
         await websocket.close()
@@ -109,7 +121,11 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
     
     meetings[meeting_id]["clients"].append(websocket)
 
-    filename = f"{SAVE_DIR}/recording_{recording_id}.wav"
+    # 判斷資料夾是否存在
+    if not os.path.exists(f"{SAVE_DIR}/{meeting_id}"):
+        os.makedirs(f"{SAVE_DIR}/{meeting_id}")
+    
+    filename = f"{SAVE_DIR}/{meeting_id}/{recording_id}.wav"
     wav_file = wave.open(filename, "wb")
     wav_file.setnchannels(1)
     wav_file.setsampwidth(2)
@@ -161,11 +177,19 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
         )
 
         # 廣播最終結果只給該會議室的 `clients`
-        final_message = f"final:{language_code} {final_text}"
+        name = user["name"] if user else "Unknown"
+        languageMap = {
+            'en-US': 'English',
+            'cmn-Hant-TW': 'Chinese',
+            'ja-JP': 'Japanese',
+            'de-DE': 'Deutsch'
+        }
+        language = languageMap.get(language_code, "Unknown")
+        final_message = f"final:{language} {name}: {final_text}"
         
         # open file {meeying_id}.txt and write final_text
         with open(f"{LOG_DIR}/{meeting_id}.txt", "a") as f:
-            f.write(final_text + "\n")
+            f.write(final_message + "\n")
         
         to_remove = []
         for client in broadcast_clients:
@@ -229,8 +253,6 @@ async def google_auth(request: Request):
 
     # 🗄️ 將 Session 存入 MongoDB
     try:
-        db = mongo_db["fastapi_sessions"]
-        sessions_collection = db["sessions"]
         insert_one(sessions_collection, user)
     except Exception as e:
         print(e)
@@ -245,11 +267,9 @@ async def google_auth(request: Request):
 @app.get("/profile")
 async def profile(request: Request, session_id: str):
     print(session_id)
-    db = mongo_db["fastapi_sessions"]
-    sessions_collection = db["sessions"]
     user = find_one(sessions_collection, {"session_id": session_id})
     if not user:
-        raise HTTPException(status_code=401, detail="未授權的存取")
+        JSONResponse(content={"message": "找不到使用者"})
     user["_id"] = str(user["_id"])
     print(user)
     return JSONResponse(content={"profile": user})
@@ -257,8 +277,6 @@ async def profile(request: Request, session_id: str):
 @app.post("/logout")
 async def logout(request: Request, session_id: str):
     print(session_id)
-    db = mongo_db["fastapi_sessions"]
-    sessions_collection = db["sessions"]
     user = find_one(sessions_collection, {"session_id": session_id})
     print("delete:", user)
     if user:
@@ -285,4 +303,6 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     mongo_db = connect_to_mongodb()
+    db = mongo_db["database"]
+    sessions_collection = db["sessions"]
     uvicorn.run(app, host="localhost", port=8765)
