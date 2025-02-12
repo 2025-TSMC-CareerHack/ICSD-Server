@@ -13,6 +13,9 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as grequests
 from starlette.middleware.sessions import SessionMiddleware
 import uuid
+import json
+from urllib.parse import parse_qs
+from starlette.responses import RedirectResponse
 
 
 
@@ -31,14 +34,14 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*", "https://koying.asuscomm.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 SECRET_KEY = os.getenv("SECRET_KEY")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="none", https_only=True)
 
 mongo_db = None
 db = None
@@ -113,6 +116,9 @@ async def get_log(meeting_id: str):
 @app.websocket("/ws/record/{meeting_id}/{recording_id}")
 async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str, session_id: str):
     await websocket.accept()
+    if not session_id:
+        await websocket.close()
+        return
     user = find_one(sessions_collection, {"session_id": session_id})
     
     if meeting_id not in meetings:
@@ -231,42 +237,59 @@ async def websocket_broadcast(websocket: WebSocket, meeting_id: str):
 
 @app.post("/auth/google")
 async def google_auth(request: Request):
-    data = await request.json()
-    token = data.get("credential", "").strip()
-    if not token or token == "undefined":
-        raise HTTPException(status_code=400, detail="無效的 token：前端未傳送正確的認證資料")
     try:
+        print("🔍 收到請求: /auth/google")
+        print(f"🔍 Headers: {request.headers}")
+
+        # 嘗試解析 JSON 或 x-www-form-urlencoded
+        raw_body = await request.body()
+        body_str = raw_body.decode()
+        print(f"🔍 Raw Body: {body_str}")
+
+        # 嘗試解析 JSON
+        try:
+            data = json.loads(body_str)
+        except json.JSONDecodeError:
+            # 若 JSON 解析失敗，則嘗試解析 x-www-form-urlencoded
+            data = parse_qs(body_str)
+            print(f"🔍 Parsed Form Data: {data}")
+
+            # 轉換為標準 Python 字典
+            data = {k: v[0] for k, v in data.items()}
+
+        token = data.get("credential", "").strip()
+        if not token or token == "undefined":
+            raise HTTPException(status_code=400, detail="❌ 無效的 token：前端未傳送正確的認證資料")
+
         idinfo = id_token.verify_oauth2_token(token, grequests.Request(), GOOGLE_CLIENT_ID)
+
+        session_id = str(uuid.uuid4())
+        user = {
+            "session_id": session_id,
+            "user_id": idinfo.get("sub"),
+            "name": idinfo.get("name"),
+            "email": idinfo.get("email"),
+            "picture": idinfo.get("picture"),
+        }
+
+        print(f"✅ 驗證成功，使用者資訊: {user}")
+
+        response = RedirectResponse(url="../../index.html")  # ✅ 登入後跳轉回首頁
+        response.set_cookie(key="session_id", value=session_id, httponly=True, secure=True, samesite="None")
+        return response
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"無效的 token: {str(e)}")
-    
-    session_id = str(uuid.uuid4())  # 生成隨機 Session ID
-
-    user = {
-        "session_id": session_id,
-        "user_id": idinfo.get("sub"),
-        "name": idinfo.get("name"),
-        "email": idinfo.get("email"),
-        "picture": idinfo.get("picture"),
-    }
-    
-
-    # 🗄️ 將 Session 存入 MongoDB
-    try:
-        insert_one(sessions_collection, user)
     except Exception as e:
-        print(e)
-        raise HTTPException(status_code=500, detail=f"儲存 Session 失敗: {str(e)}")
-    
-    # 📝 儲存 Session 到 FastAPI 的 SessionMiddleware
-    # request.session["user"] = user
-    user["_id"] = str(user["_id"])
-    print(user)
-    return JSONResponse(content={"message": "登入成功", "session_id": session_id, "user": user})
+        raise HTTPException(status_code=500, detail=f"伺服器錯誤: {str(e)}")
+
+
 
 @app.get("/profile")
 async def profile(request: Request, session_id: str):
     print(session_id)
+    if session_id == "0" or not session_id:
+        return JSONResponse(content={"message": "找不到使用者"})
     user = find_one(sessions_collection, {"session_id": session_id})
     if not user:
         JSONResponse(content={"message": "找不到使用者"})
@@ -277,6 +300,8 @@ async def profile(request: Request, session_id: str):
 @app.post("/logout")
 async def logout(request: Request, session_id: str):
     print(session_id)
+    if not session_id:
+        return JSONResponse(content={"message": "找不到使用者"})
     user = find_one(sessions_collection, {"session_id": session_id})
     print("delete:", user)
     if user:
@@ -305,4 +330,4 @@ if __name__ == "__main__":
     mongo_db = connect_to_mongodb()
     db = mongo_db["database"]
     sessions_collection = db["sessions"]
-    uvicorn.run(app, host="localhost", port=8765)
+    uvicorn.run(app, host="0.0.0.0", port=8765)
