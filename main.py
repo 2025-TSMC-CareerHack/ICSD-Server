@@ -1,5 +1,5 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import wave
 import datetime
@@ -16,7 +16,7 @@ import uuid
 import json
 from urllib.parse import parse_qs
 from starlette.responses import RedirectResponse
-
+import requests
 
 
 from final_recognizer import final_transcribe
@@ -273,9 +273,17 @@ async def google_auth(request: Request):
         }
 
         print(f"✅ 驗證成功，使用者資訊: {user}")
+        insert_one(sessions_collection, user)
 
-        response = RedirectResponse(url="../../index.html")  # ✅ 登入後跳轉回首頁
-        response.set_cookie(key="session_id", value=session_id, httponly=True, secure=True, samesite="None")
+        host = request.url.hostname
+        is_local = host in ["localhost", "127.0.0.1"]
+
+        # 根據 `host` 判斷要跳轉的 URL
+        redirect_url = "http://localhost:8765/" if is_local else "https://koying.asuscomm.com/TSMC2025/"
+
+        print(f"🔄 重導向至: {redirect_url}")
+        response =  RedirectResponse(url=redirect_url, status_code=303)
+        response.set_cookie(key="session_id", value=session_id)
         return response
 
     except ValueError as e:
@@ -310,6 +318,12 @@ async def logout(request: Request, session_id: str):
     request.session.clear()
     
     return JSONResponse(content={"message": "已成功登出"})
+
+@app.get("/proxy-image")
+async def proxy_image(url: str):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
+    return Response(content=response.content, media_type="image/jpeg")
 
 
 @app.get("/")
