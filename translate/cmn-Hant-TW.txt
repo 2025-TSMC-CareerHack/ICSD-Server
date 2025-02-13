@@ -1,0 +1,31 @@
+Type	Proper Noun 	Description
+Fab	DDR Ratio	Defective Dies Ratio,為wafer defect的一個指標，為一個基準定義此批產品是否會報廢，而這些defect影響產品yield的程度。
+Fab	EC	是機台的設定值，有些能修改，因製程調機參數不同可作變動，根據製程定義，有些無法修改，像是機台的溫度都是固定的。機台交回去之前一定要檢查EC是否match母版。
+Fab	ECS	Equipment Constant System. 防止因機台參數被更改而造成產品報廢之風險，相當於設備工程師的RMS。
+Fab	ECCP	Engineering Change Certification Plan (工程變更驗證計劃)。
+Fab	ECN	Engineer Change Notice.
+Fab	Emergency stop	緊急停止。
+Fab	Alignment mark	機台上用來定義為基準點的標記，通常為從Wafer上選定一個特定(非對稱、無重複性)的位置，好讓機器能夠自動抓取作為基準點。
+Fab	ALP	Active Load Port ，當機台的兩個Port被Lot塞滿後，第三批貨先行傳至機台旁的ALP，當機台Port上的貨跑完被取走後，ALP上的貨物會藉由ALP的手臂傳至機台上。
+Fab	STB	Start to Build，wafer下線。
+Fab	STK	Stocker儲存櫃。
+Fab	Route	Process flow (途程)。
+Fab	Scrap	報廢。
+Fab	Sorter	排序機台。
+Fab	Split	分帳、分批。
+Fab	大夜	大夜
+Fab	小夜	小夜
+Fab	日班	日班
+Fab	光罩	光罩
+IT	DP 	Data Platform，資料收集平台，收集各種系統log並分析異常。
+IT	SGP	Secure GenAI Platform，安全GenAI平台，提供安全的AI服務。
+IT	ETP	Enterprise Translation Platform，翻譯整合平台，提供安全且即時的翻譯服務，包含會議紀錄及查詢等功能。
+GCP	Cloud Run	Cloud Run 是一個完全託管的平台，讓開發者可以運行容器化的應用程式。它支持自動擴展，根據流量需求動態調整資源，適合部署 HTTP 驅動的微服務。
+GCP	Cloud Function	Cloud Function 是一種無伺服器的計算服務，允許開發者撰寫簡單的單一用途功能，並根據事件觸發自動執行，無需管理伺服器基礎設施。
+GCP	BigQuery	BigQuery 是一個無伺服器的、超大規模的數據倉庫服務，提供快速 SQL 查詢能力，適合分析大規模數據集，支持即時分析。
+GCP	Pub/Sub	 Pub/Sub 是一種消息傳遞服務，允許應用程式之間進行可靠且可擴展的非同步通訊，支持事件驅動架構和流式數據處理。
+GCP	Cloud SQL	Cloud SQL 是一個完全託管的關聯式資料庫服務，支持 MySQL、PostgreSQL 和 SQL Server，可以輕鬆地配置、維護和管理資料庫。
+GCP	Artifact Registry	Artifact Registry 是一個管理容器映像、包和其他工件的託管服務，提供安全的存儲和版本控制。
+GCP	Cloud Storage	Cloud Storage 是一個全球範圍的物件存儲系統，提供高可用性、持久性和安全性，適合存儲和檢索任何類型的數據。
+GCP	GKE	Google Kubernetes Engine，是一個託管的 Kubernetes 服務，提供簡化的 Kubernetes 群集管理，讓開發者輕鬆部署、管理和擴展容器化應用。
+GCP	Vertex AI	Vertex AI 是一個統一的機器學習平台，提供從資料準備、訓練到部署的全套工具，支持自動化機器學習和自定義模型的開發。

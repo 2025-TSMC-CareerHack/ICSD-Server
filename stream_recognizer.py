@@ -22,7 +22,8 @@ class StreamRecognizer:
             "message": transcript,
             "name": self.name,
             "language": self.language,
-            "status": "temp"
+            "status": "temp",
+            "label": "transcript"
         }
         
         # print(f"廣播訊息: {message}")

@@ -19,6 +19,8 @@ from starlette.responses import RedirectResponse
 import requests
 
 import whisper
+import soundfile as sf
+import numpy as np
 
 
 from final_recognizer import final_transcribe
@@ -33,6 +35,12 @@ REGION = "us-central1"
 vertexai.init(project=PROJECT_ID,  location=REGION) 
 model  =  GenerativeModel(  "gemini-1.5-pro-002"  ) 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
+MODEL_NAME = "large"
+print("🔄 加載 Whisper 模型...")
+whisper_model = whisper.load_model(MODEL_NAME)
+print("✅ Whisper 模型加載完成！")
+
 
 app = FastAPI()
 app.add_middleware(
@@ -133,18 +141,21 @@ async def get_log(meeting_id: str):
 async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str, session_id: str):
     global message_id
     await websocket.accept()
-
+    
+    print(f"🔗 WebSocket 連線已建立: 會議 {meeting_id}, 錄音 ID {recording_id}")
+    
     if not session_id:
         await websocket.close()
         return
     user = find_one(sessions_collection, {"session_id": session_id})
     name = user["name"] if user else "Unknown"
 
-    if meeting_id not in meetings:
-        await websocket.close()
-        return
 
-    # 準備音訊存檔
+    # 確保會議 ID 存在
+    if meeting_id not in meetings:
+        meetings[meeting_id] = {"clients": []}
+
+    # 創建音訊存檔
     os.makedirs(f"{SAVE_DIR}/{meeting_id}", exist_ok=True)
     filename = f"{SAVE_DIR}/{meeting_id}/{recording_id}.wav"
     wav_file = wave.open(filename, "wb")
@@ -152,20 +163,23 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
     wav_file.setsampwidth(2)
     wav_file.setframerate(16000)
 
-    # 語言處理
+    # 解析語言代碼
     parts = recording_id.rsplit("_", 1)
-    language_code = parts[1] if len(parts) == 2 else "en-US"
-    languageMap = {
+    language_code = parts[1] if len(parts) == 2 else "en"
+    language_map = {
         'en-US': 'English',
         'cmn-Hant-TW': 'Chinese',
         'ja-JP': 'Japanese',
         'de-DE': 'Deutsch'
     }
-    language = languageMap.get(language_code, "Unknown")
+    language = language_map.get(language_code, "Unknown")
 
     # 會議內部的 `broadcast_clients`
     broadcast_clients = meetings[meeting_id]["clients"]
 
+    # 音訊緩存
+    audio_buffer = []
+    
     # 建立即時辨識器
     loop = asyncio.get_running_loop()
     message_id += 1
@@ -184,98 +198,104 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
 
             if "bytes" in data:
                 chunk = data["bytes"]
+                audio_buffer.append(np.frombuffer(chunk, dtype=np.int16))
+                recognizer.add_audio_data(chunk) 
                 wav_file.writeframes(chunk)
-                recognizer.add_audio_data(chunk)  # 確保音訊寫入 queue
+            
             elif "text" in data and data["text"] == "STOP":
-                print("🔴 接收到 STOP 訊號，等待音訊處理完畢...")
-                break  # 跳出迴圈，但不馬上關閉 WebSocket
+                print("🛑 收到 STOP 訊號，開始轉錄語音...")
+                break
 
     except WebSocketDisconnect:
         print(f"⚠️ 客戶端斷開連線 (會議 {meeting_id})")
 
     finally:
-        # 等待 recognizer queue 處理完畢
         recognizer.stop()
         recognition_thread.join(timeout=5)  # 最多等待 5 秒確保音訊處理完成
         print("✅ 音訊處理已完成")
-
         wav_file.close()
         print(f"🎙️ 錄音檔案已儲存: {filename}")
 
-        # 使用 V2 進行最終完整辨識
-        final_text = await loop.run_in_executor(None, final_transcribe, filename, language_code)
-        
-        to_remove = []
-        async def broadcast_message(message):
-            for client in broadcast_clients:
-                try:
-                    await client.send_json(message)
-                except Exception as e:
-                    print("⚠️ 廣播即時辨識結果失敗:", e)
-                    to_remove.append(client)
-        print("🔍 原始辨識結果:", final_text)
-        
-        final_message = {
-            "id": message_id,
-            "message": final_text,
-            "name": name,
-            "language": language,
-            "status": "temp",
-            "label": "transcript"
-        }
-        
-        await broadcast_message(final_message)
-        
-        processed_data = await loop.run_in_executor(None, translate_to_chinese, final_text)
-        # make processed_data into json
-        print("結果:", processed_data, type(processed_data))
-        processed_data = json.loads(processed_data)
-        print("結果:", processed_data, type(processed_data))
-        optimized_text = processed_data["original"]
-        translated_text = processed_data["translation"]
-        
-        
-        print("🔍 修正後辨識結果:", optimized_text)
+        # 確保音訊數據處理完畢
+        if len(audio_buffer) > 0:
+            audio_data = np.concatenate(audio_buffer, axis=0).astype(np.float32) / 32768.0  # 轉換成 float32
+            print("🎤 轉錄音訊中...")
 
-        # 廣播最終結果
-        optimized_message = {
-            "id": message_id,
-            "message": optimized_text,
-            "name": name,
-            "language": language,
-            "status": "final",
-            "label": "transcript"
-        }
+            # 使用 Whisper 進行語音轉錄
+            result = whisper_model.transcribe(audio_data, language=language_map.get(language_code), fp16=True)
+            final_text = result["text"]
+            print("🔍 原始辨識結果:", final_text)
         
-        translated_message = {
-            "id": message_id,
-            "message": translated_text,
-            "name": name,
-            "language": language,
-            "status": "final",
-            "label": "translate"
-        }
-        await broadcast_message(translated_message)
+            to_remove = []
+            async def broadcast_message(message):
+                for client in broadcast_clients:
+                    try:
+                        await client.send_json(message)
+                    except Exception as e:
+                        print("⚠️ 廣播即時辨識結果失敗:", e)
+                        to_remove.append(client)
+            print("🔍 原始辨識結果:", final_text)
             
-        
-        print("🔍 翻譯結果:", translated_message)
-        
-
-        # 儲存會議記錄
-        with open(f"{LOG_DIR}/{meeting_id}.json", "a", encoding='utf-8') as f:
-            json.dump(optimized_message, f, ensure_ascii=False)
-            f.write("\n")  # 確保每條記錄換行
+            final_message = {
+                "id": message_id,
+                "message": final_text,
+                "name": name,
+                "language": language,
+                "status": "temp",
+                "label": "transcript"
+            }
             
-        with open(f"{TRANS_DIR}/{meeting_id}.json", "a", encoding='utf-8') as f:
-            json.dump(translated_message, f, ensure_ascii=False)
-            f.write("\n")
-        
-        
-        for client in to_remove:
-            broadcast_clients.remove(client)
+            await broadcast_message(final_message)
+            
+            processed_data = await loop.run_in_executor(None, translate_to_chinese, final_text)
+            # make processed_data into json
+            print("結果:", processed_data, type(processed_data))
+            processed_data = json.loads(processed_data)
+            print("結果:", processed_data, type(processed_data))
+            optimized_text = processed_data["original"]
+            translated_text = processed_data["translation"]
+            
+            
+            print("🔍 修正後辨識結果:", optimized_text)
 
-        print("🔴 WebSocket 連線已關閉")
+            # 廣播最終結果
+            optimized_message = {
+                "id": message_id,
+                "message": optimized_text,
+                "name": name,
+                "language": language,
+                "status": "final",
+                "label": "transcript"
+            }
+            
+            translated_message = {
+                "id": message_id,
+                "message": translated_text,
+                "name": name,
+                "language": language,
+                "status": "final",
+                "label": "translate"
+            }
+            await broadcast_message(translated_message)
+                
+            
+            print("🔍 翻譯結果:", translated_message)
+            
 
+            # 儲存會議記錄
+            with open(f"{LOG_DIR}/{meeting_id}.json", "a", encoding='utf-8') as f:
+                json.dump(optimized_message, f, ensure_ascii=False)
+                f.write("\n")  # 確保每條記錄換行
+                
+            with open(f"{TRANS_DIR}/{meeting_id}.json", "a", encoding='utf-8') as f:
+                json.dump(translated_message, f, ensure_ascii=False)
+                f.write("\n")
+            
+            
+            for client in to_remove:
+                broadcast_clients.remove(client)
+
+            print("🔴 WebSocket 連線已關閉")
 
 @app.post("/record/{recording_id}/upload")
 async def upload_recording(recording_id: str, file: UploadFile = File(...)):

@@ -27,7 +27,7 @@ def final_transcribe(filename: str, language_code: str) -> str:
     else:
         config = cloud_speech.RecognitionConfig(
             auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-            language_codes=[language_code, "en-US"],
+            language_codes=["en-US", language_code],
             model=model,
         )
 
