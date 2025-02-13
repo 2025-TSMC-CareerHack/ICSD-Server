@@ -13,7 +13,7 @@ def final_transcribe(filename: str, language_code: str) -> str:
     # 判斷語音長度有沒有超過 30 秒
     audio_length = len(audio_content) / 32000
     model = ""
-    if audio_length > 30:
+    if audio_length > 10:
         model = "latest_long"
     else:
         model = "latest_short"
