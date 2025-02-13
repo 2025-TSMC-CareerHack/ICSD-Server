@@ -118,31 +118,26 @@ async def get_log(meeting_id: str):
 async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str, session_id: str):
     global message_id
     await websocket.accept()
+
     if not session_id:
         await websocket.close()
         return
     user = find_one(sessions_collection, {"session_id": session_id})
-    
     name = user["name"] if user else "Unknown"
-    
-    
+
     if meeting_id not in meetings:
         await websocket.close()
         return
-    
-    # meetings[meeting_id]["clients"].append(websocket)
 
-    # 判斷資料夾是否存在
-    if not os.path.exists(f"{SAVE_DIR}/{meeting_id}"):
-        os.makedirs(f"{SAVE_DIR}/{meeting_id}")
-    
+    # 準備音訊存檔
+    os.makedirs(f"{SAVE_DIR}/{meeting_id}", exist_ok=True)
     filename = f"{SAVE_DIR}/{meeting_id}/{recording_id}.wav"
     wav_file = wave.open(filename, "wb")
     wav_file.setnchannels(1)
     wav_file.setsampwidth(2)
     wav_file.setframerate(16000)
 
-    # 解析語言代碼
+    # 語言處理
     parts = recording_id.rsplit("_", 1)
     language_code = parts[1] if len(parts) == 2 else "en-US"
     languageMap = {
@@ -159,7 +154,6 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
     # 建立即時辨識器
     loop = asyncio.get_running_loop()
     message_id += 1
-    print(message_id)
     recognizer = StreamRecognizer(language_code, loop, broadcast_clients, message_id, name, language)
     
     # 在背景執行緒中啟動即時辨識
@@ -172,32 +166,31 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
     try:
         while True:
             data = await websocket.receive()
+
             if "bytes" in data:
                 chunk = data["bytes"]
                 wav_file.writeframes(chunk)
-                recognizer.add_audio_data(chunk)
-            elif "text" in data:
-                if data["text"] == "STOP":
-                    break
+                recognizer.add_audio_data(chunk)  # 確保音訊寫入 queue
+            elif "text" in data and data["text"] == "STOP":
+                print("🔴 接收到 STOP 訊號，等待音訊處理完畢...")
+                break  # 跳出迴圈，但不馬上關閉 WebSocket
+
     except WebSocketDisconnect:
-        print(f"客戶端斷開會議 {meeting_id}")
+        print(f"⚠️ 客戶端斷開連線 (會議 {meeting_id})")
+
     finally:
+        # 等待 recognizer queue 處理完畢
         recognizer.stop()
-        recognition_thread.join(timeout=2)
-        
+        recognition_thread.join(timeout=5)  # 最多等待 5 秒確保音訊處理完成
+        print("✅ 音訊處理已完成")
+
         wav_file.close()
-        print(f"錄音檔案已儲存：{filename}")
+        print(f"🎙️ 錄音檔案已儲存: {filename}")
 
         # 使用 V2 進行最終完整辨識
-        final_text = await loop.run_in_executor(
-            None, 
-            final_transcribe, 
-            filename, 
-            language_code
-        )
+        final_text = await loop.run_in_executor(None, final_transcribe, filename, language_code)
 
-        # 廣播最終結果只給該會議室的 `clients`
-        
+        # 廣播最終結果
         final_message = {
             "id": message_id,
             "message": final_text,
@@ -205,21 +198,24 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
             "language": language,
             "status": "final"
         }
-        
-        # open file {meeying_id}.txt and write final_text
+
+        # 儲存會議記錄
         with open(f"{LOG_DIR}/{meeting_id}.json", "a", encoding='utf-8') as f:
             json.dump(final_message, f, ensure_ascii=False)
-            f.write("\n")  # 確保換行，使每條記錄分開
-        
+            f.write("\n")  # 確保每條記錄換行
+
         to_remove = []
         for client in broadcast_clients:
             try:
                 await client.send_json(final_message)
             except Exception as e:
-                print("廣播最終辨識結果失敗:", e)
+                print("⚠️ 廣播最終辨識結果失敗:", e)
                 to_remove.append(client)
+
         for client in to_remove:
             broadcast_clients.remove(client)
+
+        print("🔴 WebSocket 連線已關閉")
 
 
 @app.post("/record/{recording_id}/upload")
