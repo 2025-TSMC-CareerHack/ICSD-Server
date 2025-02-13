@@ -56,6 +56,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 broadcast_clients = []
 meetings = {}
+global message_id
 
 @app.post("/summarize")
 async def summarize_meeting(request: Request):
@@ -104,28 +105,32 @@ async def start_recording(request: Request):
     recording_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + language
     return JSONResponse(content={"recording_id": recording_id})
 
-@app.get("/log")
+@app.get("/transcript_log")
 async def get_log(meeting_id: str):
     try:
-        with open(f"{LOG_DIR}/{meeting_id}.txt", "r") as f:
+        with open(f"{LOG_DIR}/{meeting_id}.json", "r") as f:
             logs = f.readlines()
         return JSONResponse(content=logs)
     except FileNotFoundError:
-        return JSONResponse(content="")
+        return JSONResponse(content={})
 
 @app.websocket("/ws/record/{meeting_id}/{recording_id}")
 async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str, session_id: str):
+    global message_id
     await websocket.accept()
     if not session_id:
         await websocket.close()
         return
     user = find_one(sessions_collection, {"session_id": session_id})
     
+    name = user["name"] if user else "Unknown"
+    
+    
     if meeting_id not in meetings:
         await websocket.close()
         return
     
-    meetings[meeting_id]["clients"].append(websocket)
+    # meetings[meeting_id]["clients"].append(websocket)
 
     # 判斷資料夾是否存在
     if not os.path.exists(f"{SAVE_DIR}/{meeting_id}"):
@@ -140,13 +145,22 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
     # 解析語言代碼
     parts = recording_id.rsplit("_", 1)
     language_code = parts[1] if len(parts) == 2 else "en-US"
+    languageMap = {
+        'en-US': 'English',
+        'cmn-Hant-TW': 'Chinese',
+        'ja-JP': 'Japanese',
+        'de-DE': 'Deutsch'
+    }
+    language = languageMap.get(language_code, "Unknown")
 
     # 會議內部的 `broadcast_clients`
     broadcast_clients = meetings[meeting_id]["clients"]
 
     # 建立即時辨識器
     loop = asyncio.get_running_loop()
-    recognizer = StreamRecognizer(language_code, loop, broadcast_clients)
+    message_id += 1
+    print(message_id)
+    recognizer = StreamRecognizer(language_code, loop, broadcast_clients, message_id, name, language)
     
     # 在背景執行緒中啟動即時辨識
     recognition_thread = threading.Thread(
@@ -183,24 +197,24 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
         )
 
         # 廣播最終結果只給該會議室的 `clients`
-        name = user["name"] if user else "Unknown"
-        languageMap = {
-            'en-US': 'English',
-            'cmn-Hant-TW': 'Chinese',
-            'ja-JP': 'Japanese',
-            'de-DE': 'Deutsch'
+        
+        final_message = {
+            "id": message_id,
+            "message": final_text,
+            "name": name,
+            "language": language,
+            "status": "final"
         }
-        language = languageMap.get(language_code, "Unknown")
-        final_message = f"final:{language} {name}: {final_text}"
         
         # open file {meeying_id}.txt and write final_text
-        with open(f"{LOG_DIR}/{meeting_id}.txt", "a") as f:
-            f.write(final_message + "\n")
+        with open(f"{LOG_DIR}/{meeting_id}.json", "a", encoding='utf-8') as f:
+            json.dump(final_message, f, ensure_ascii=False)
+            f.write("\n")  # 確保換行，使每條記錄分開
         
         to_remove = []
         for client in broadcast_clients:
             try:
-                await client.send_text(final_message)
+                await client.send_json(final_message)
             except Exception as e:
                 print("廣播最終辨識結果失敗:", e)
                 to_remove.append(client)
@@ -279,7 +293,7 @@ async def google_auth(request: Request):
         is_local = host in ["localhost", "127.0.0.1"]
 
         # 根據 `host` 判斷要跳轉的 URL
-        redirect_url = "http://localhost:8765/" if is_local else "https://koying.asuscomm.com/TSMC2025/"
+        redirect_url = "http://localhost:48764/" if is_local else "https://koying.asuscomm.com/TSMC2025/"
 
         print(f"🔄 重導向至: {redirect_url}")
         response =  RedirectResponse(url=redirect_url, status_code=303)
@@ -341,6 +355,7 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+    message_id = 0
     mongo_db = connect_to_mongodb()
     db = mongo_db["database"]
     sessions_collection = db["sessions"]

@@ -3,21 +3,34 @@ import asyncio
 from google.cloud import speech
 
 class StreamRecognizer:
-    def __init__(self, language_code: str, loop, broadcast_clients):
+    def __init__(self, language_code: str, loop, broadcast_clients, message_id, name, language):
         self.language_code = language_code
         self.loop = loop
         self.broadcast_clients = broadcast_clients  # 這是會議內部的 clients
         self.audio_queue = queue.Queue()
         self.is_running = True
+        self.message_id = message_id
+        self.name = name
+        self.language = language
 
     async def broadcast_transcript(self, transcript: str, is_final: bool):
         """只對當前會議的 clients 廣播轉錄結果"""
-        message = f"temp:{transcript}"
+        # message = f"temp:{transcript}"
+        print(transcript)
+        message = {
+            "id": self.message_id,
+            "message": transcript,
+            "name": self.name,
+            "language": self.language,
+            "status": "temp"
+        }
+        
+        # print(f"廣播訊息: {message}")
         
         to_remove = []
         for client in self.broadcast_clients:
             try:
-                await client.send_text(message)
+                await client.send_json(message)
             except Exception as e:
                 print(f"廣播失敗: {e}")
                 to_remove.append(client)
