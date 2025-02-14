@@ -56,7 +56,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 TRANS_DIR = "translates"
-os.makedirs(SAVE_DIR, exist_ok=True)
+os.makedirs(TRANS_DIR, exist_ok=True)
 UPLOAD_DIR = "upload"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
