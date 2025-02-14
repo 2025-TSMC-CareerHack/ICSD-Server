@@ -31,7 +31,15 @@ def fix_transcript(transcript, model = 'mistral-large-latest'):
     
     return chat_response.choices[0].message.content
 
-def translate_to_chinese(message, model = 'mistral-large-latest'):
+LANGUAGE_CODE = {
+    "zh": "繁體中文",
+    "en": "英文",
+    "ja": "日文",
+    "de": "德文"
+}
+
+
+def translate_to_chinese(message, model = 'mistral-large-latest', language_code = 'zh'):
     api_key = os.getenv('MISTRAL_API_KEY')
     if not api_key:
         raise ValueError("請先設定環境變數 MISTRAL_API_KEY")
