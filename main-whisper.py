@@ -36,10 +36,10 @@ vertexai.init(project=PROJECT_ID,  location=REGION)
 model  =  GenerativeModel(  "gemini-1.5-pro-002"  ) 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
-MODEL_NAME = "large"
-print("🔄 加載 Whisper 模型...")
-whisper_model = whisper.load_model(MODEL_NAME)
-print("✅ Whisper 模型加載完成！")
+# MODEL_NAME = "large"
+# print("🔄 加載 Whisper 模型...")
+# whisper_model = whisper.load_model(MODEL_NAME)
+# print("✅ Whisper 模型加載完成！")
 
 
 app = FastAPI()
@@ -137,6 +137,45 @@ async def get_log(meeting_id: str):
     except FileNotFoundError:
         return JSONResponse(content={})
 
+import requests
+import json
+import tempfile
+import os
+
+WHISPER_SERVER_URL = "http://10.121.240.40:8765/transcribe"
+LANGUAGE_MAP = {
+    "en-US": "en",
+    "cmn-Hant-TW": "zh",
+    "ja-JP": "ja",
+    "de-DE": "de",
+}
+
+def transcript_audio(wave_path: str, language_code: str) -> str:
+    """發送音訊數據到 GPU Whisper 伺服器進行轉錄"""
+    # 創建一個臨時音訊檔案
+    # with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+    #     temp_file.write(audio_data)
+    #     temp_file_path = temp_file.name
+
+    try:
+        # 設定請求參數
+        files = {"file": open(wave_path, "rb")}
+        data = {"language": LANGUAGE_MAP.get(language_code, "en")}
+
+        # 發送 POST 請求到 Whisper 伺服器
+        response = requests.post(WHISPER_SERVER_URL, files=files, data=data)
+
+        if response.status_code == 200:
+            return response.json().get("text", "Transcription failed")
+        else:
+            return f"Error: {response.status_code} - {response.text}"
+    except Exception as e:
+        return f"Exception: {str(e)}"
+    # finally:
+        # 移除臨時音訊檔案
+        # os.remove(temp_file_path)
+
+
 @app.websocket("/ws/record/{meeting_id}/{recording_id}")
 async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: str, session_id: str):
     global message_id
@@ -218,13 +257,30 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
 
         # 確保音訊數據處理完畢
         if len(audio_buffer) > 0:
-            audio_data = np.concatenate(audio_buffer, axis=0).astype(np.float32) / 32768.0  # 轉換成 float32
-            print("🎤 轉錄音訊中...")
+            # audio_data = np.concatenate(audio_buffer, axis=0).astype(np.float32) / 32768.0  # 轉換成 float32
+            # print("🎤 轉錄音訊中...")
+            
+            if not audio_buffer:
+                print("⚠️ 音訊緩衝區為空，無法轉錄")
+                return
+            
+            # 2️⃣ **將音訊緩衝區轉換成 NumPy 陣列**
+            audio_data = np.concatenate([np.frombuffer(chunk, dtype=np.int16) for chunk in audio_buffer])
+            
+            # 3️⃣ **確保音訊數據正確並寫入 WAV 檔案**
+            wav_path = f"{filename}.wav"
+            sf.write(wav_path, audio_data, samplerate=16000, subtype="PCM_16")
+            print(f"🎙️ 音訊檔案已儲存：{wav_path}")
+            
+            final_text = await loop.run_in_executor(None, transcript_audio, wav_path, language_code)
+            print("🔍 原始辨識結果:", final_text)
 
             # 使用 Whisper 進行語音轉錄
-            result = whisper_model.transcribe(audio_data, language=language_map.get(language_code), fp16=True)
-            final_text = result["text"]
-            print("🔍 原始辨識結果:", final_text)
+            # result = whisper_model.transcribe(audio_data, language=language_map.get(language_code), fp16=True)
+            # result = transcript_audio(audio_data, language_code)
+            # print(result)
+            # final_text = result["text"]
+            # print("🔍 原始辨識結果:", final_text)
         
             to_remove = []
             async def broadcast_message(message):
@@ -267,6 +323,7 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
                 "status": "final",
                 "label": "transcript"
             }
+            await broadcast_message(optimized_message)
             
             translated_message = {
                 "id": message_id,
