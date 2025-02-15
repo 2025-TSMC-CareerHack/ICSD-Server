@@ -1,0 +1,32 @@
+source,target
+DDR Ratio,DDR Ratio
+EC,EC
+ECS,ECS
+ECCP,ECCP
+ECN,ECN
+Emergency stop,Emergency stop
+Alignment mark,Alignment mark
+ALP,ALP
+STB,STB
+STK,STK
+Route,Route(Process flow)
+Scrap,報廢
+Sorter,排序機台
+Split,分帳
+DP,DP
+SGP,SGP
+ETP,ETP
+Cloud Run,Cloud Run
+Cloud Function,Cloud Function
+BigQuery,BigQuery
+Pub/Sub,Pub/Sub
+Cloud SQL,Cloud SQL
+Artifact Registry,Artifact Registry
+Cloud Storage,Cloud Storage
+GKE,GKE
+Vertex AI,Vertex AI
+夜勤,大夜
+準夜勤,小夜
+日勤,日班
+マスク,光罩
+IT,IT

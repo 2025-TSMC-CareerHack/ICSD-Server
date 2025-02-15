@@ -234,6 +234,9 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
         optimized_text = processed_data["original"]
         translated_text = processed_data["translation"]
         
+        for proper in processed_data["proper"]:
+            translated_text = translated_text + f"\n{proper}"
+        
         
         print("🔍 修正後辨識結果:", optimized_text)
 

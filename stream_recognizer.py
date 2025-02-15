@@ -7,16 +7,19 @@ import soundfile as sf
 import numpy as np
 import requests 
 import json
+import os
+import random
 
-from mistral import *
+from translate.translate_deepl import *
 
-WHISPER_SERVER_URL = "http://10.121.240.40:8765/transcribe"
+WHISPER_SERVER_URL = "http://10.121.240.4"
 LANGUAGE_MAP = {
     "en-US": "en",
     "cmn-Hant-TW": "zh",
     "ja-JP": "ja",
     "de-DE": "de",
 }
+
 
 async def transcript_audio(wave_path: str, language_code: str) -> str:
     """發送音訊數據到 GPU Whisper 伺服器進行轉錄"""
@@ -34,7 +37,7 @@ async def transcript_audio(wave_path: str, language_code: str) -> str:
         print(f"🔄 發送音訊: {wave_path} 進行辨識...")
 
         # 發送 POST 請求到 Whisper 伺服器
-        response = requests.post(WHISPER_SERVER_URL, files=files, data=data)
+        response = requests.post(f"{WHISPER_SERVER_URL}{random.randint(0, 1)}:876{random.randint(0, 3)}/transcribe", files=files, data=data)
         
         print(f"🔄 Whisper 伺服器回應: {response}")
 
@@ -46,7 +49,7 @@ async def transcript_audio(wave_path: str, language_code: str) -> str:
         return f"Exception: {str(e)}"
 
 class StreamRecognizer:
-    def __init__(self, language_code: str, loop, broadcast_clients, message_id, name, language):
+    def __init__(self, language_code: str, loop, broadcast_clients, message_id, name, language, translator):
         self.language_code = language_code
         self.loop = loop
         self.broadcast_clients = broadcast_clients  # 這是會議內部的 clients
@@ -58,6 +61,7 @@ class StreamRecognizer:
         self.full_audio_buffer = []  # 儲存所有音訊數據
         self.last_update_time = time.time()
         self.loop = asyncio.get_event_loop()
+        self.translator = translator
 
     async def broadcast_transcript(self, transcript: str, is_final: bool):
         """只對當前會議的 clients 廣播轉錄結果"""
@@ -72,7 +76,7 @@ class StreamRecognizer:
             "label": "transcript"
         }
         
-        # print(f"廣播訊息: {message}")
+        print(f"廣播訊息: {message}")
         
         to_remove = []
         for client in self.broadcast_clients:
@@ -99,7 +103,7 @@ class StreamRecognizer:
             "label": "translate"
         }
         
-        # print(f"廣播訊息: {message}")
+        print(f"廣播訊息: {message}")
         
         to_remove = []
         for client in self.broadcast_clients:
@@ -112,6 +116,33 @@ class StreamRecognizer:
         # 移除已斷線的客戶端
         for client in to_remove:
             self.broadcast_clients.remove(client)
+        
+    # async def broadcast_transcript(self, transcript: str, is_final: bool):
+    #     """只對當前會議的 clients 廣播轉錄結果"""
+    #     # message = f"temp:{translate}"
+    #     print(transcript)
+    #     message = {
+    #         "id": self.message_id,
+    #         "message": transcript,
+    #         "name": self.name,
+    #         "language": self.language,
+    #         "status": "temp",
+    #         "label": "transcript"
+    #     }
+        
+    #     # print(f"廣播訊息: {message}")
+        
+    #     to_remove = []
+    #     for client in self.broadcast_clients:
+    #         try:
+    #             await client.send_json(message)
+    #         except Exception as e:
+    #             print(f"廣播失敗: {e}")
+    #             to_remove.append(client)
+
+    #     # 移除已斷線的客戶端
+    #     for client in to_remove:
+    #         self.broadcast_clients.remove(client)
 
 
     def process_audio(self):
@@ -135,10 +166,10 @@ class StreamRecognizer:
                         break
                     
                     self.full_audio_buffer.append(chunk)  # 累積音訊數據
-                    yield speech.StreamingRecognizeRequest(audio_content=chunk)
+                    # yield speech.StreamingRecognizeRequest(audio_content=chunk)
 
-                    # 每 5 秒鐘更新一次翻譯
-                    if time.time() - self.last_update_time >= 5:
+                    # 每 0.5 秒鐘更新一次翻譯
+                    if time.time() - self.last_update_time >= 1:
                         self.last_update_time = time.time()
                         self.updateTranslate()
                     
@@ -199,20 +230,29 @@ class StreamRecognizer:
     async def send_audio_to_translation(self, wav_path):
         """模擬發送音檔到翻譯系統 (這裡你需要替換成你的翻譯 API 呼叫)"""
         print(f"🔄 送出音訊: {wav_path} 進行翻譯...")
+        start_time = time.time()
         # 這裡可以加上 HTTP POST 請求到翻譯系統
         # 例如: await send_to_translation_server(wav_path)
         temp_text = await transcript_audio(wav_path, self.language_code)
         # temp_text = await self.loop.run_in_executor(None, transcript_audio, wav_path, self.language_code)
         print("🔄 暫時辨識結果: ", temp_text)
+        await self.broadcast_transcript(temp_text, True)
+        
         # processed_temp_data = await translate_to_chinese(temp_text)
-        processed_temp_data = await self.loop.run_in_executor(None, translate_to_chinese, temp_text)
+        print(self.translator.translate_to_chinese, temp_text, self.language_code)
+        processed_temp_data = self.translator.translate_to_chinese(
+            temp_text, LANGUAGE_MAP.get(self.language_code, "en-US").upper()
+        ) if self.language_code != "cmn-Hant-TW" else temp_text
+
         print(f"🔄 翻譯結果: {processed_temp_data}")
-        processed_temp_data = json.loads(processed_temp_data)
-        processed_temp_translated_text = processed_temp_data["translation"]
+        # processed_temp_data = json.loads(processed_temp_data)
+        # processed_temp_translated_text = processed_temp_data["translation"]
         
-        print(f"🔄 暫時翻譯結果: {processed_temp_data}")
+        # print(f"🔄 暫時翻譯結果: {processed_temp_data}")
+        await self.broadcast_translate(processed_temp_data, True)
         
-        await self.broadcast_translate(processed_temp_translated_text, True)
+        await seript(processed_temp_data, True)
+        print(f"🕒 暫時翻譯花費時間: {time.time() - start_time} 秒")
         
 
     def add_audio_data(self, audio_chunk):

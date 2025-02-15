@@ -21,12 +21,14 @@ import requests
 import whisper
 import soundfile as sf
 import numpy as np
+import random
 
 
 from final_recognizer import final_transcribe
 from stream_recognizer import StreamRecognizer
 from mongodb_atlas import *
 from mistral import *
+from translate.translate_deepl import *
 
 # GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # genai.configure(api_key=GEMINI_API_KEY)
@@ -57,6 +59,8 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="none", h
 mongo_db = None
 db = None
 session_collection = None
+translator = None
+mistral_api = None
 
 
 SAVE_DIR = "recordings"
@@ -142,7 +146,7 @@ import json
 import tempfile
 import os
 
-WHISPER_SERVER_URL = "http://10.121.240.40:8765/transcribe"
+WHISPER_SERVER_URL = "http://10.121.240.4"
 LANGUAGE_MAP = {
     "en-US": "en",
     "cmn-Hant-TW": "zh",
@@ -163,7 +167,7 @@ def transcript_audio(wave_path: str, language_code: str) -> str:
         data = {"language": LANGUAGE_MAP.get(language_code, "en")}
 
         # 發送 POST 請求到 Whisper 伺服器
-        response = requests.post(WHISPER_SERVER_URL, files=files, data=data)
+        response = requests.post(f"{WHISPER_SERVER_URL}{random.randint(0, 1)}:876{random.randint(0, 3)}/transcribe", files=files, data=data)
 
         if response.status_code == 200:
             return response.json().get("text", "Transcription failed")
@@ -222,7 +226,7 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
     # 建立即時辨識器
     loop = asyncio.get_running_loop()
     message_id += 1
-    recognizer = StreamRecognizer(language_code, loop, broadcast_clients, message_id, name, language)
+    recognizer = StreamRecognizer(language_code, loop, broadcast_clients, message_id, name, language, translator)
     
     # 在背景執行緒中啟動即時辨識
     recognition_thread = threading.Thread(
@@ -303,7 +307,7 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
             
             await broadcast_message(final_message)
             
-            processed_data = await loop.run_in_executor(None, translate_to_chinese, final_text)
+            processed_data = await loop.run_in_executor(None, mistral_api.translate_to_chinese, final_text)
             # make processed_data into json
             print("結果:", processed_data, type(processed_data))
             processed_data = json.loads(processed_data)
@@ -311,6 +315,10 @@ async def websocket_record(websocket: WebSocket, meeting_id: str, recording_id: 
             optimized_text = processed_data["original"]
             translated_text = processed_data["translation"]
             
+            
+            if "proper" in processed_data:
+                for proper in processed_data["proper"]:
+                    translated_text = translated_text + f"\n{proper}"
             
             print("🔍 修正後辨識結果:", optimized_text)
 
@@ -479,16 +487,21 @@ async def root():
     可在實際環境下使用 StaticFiles 模組來處理靜態資源。
     """
     try:
-        with open("index.html", "r", encoding="utf-8") as f:
+        with open("login.html", "r", encoding="utf-8") as f:
             html_content = f.read()
         return HTMLResponse(content=html_content)
     except Exception as e:
         return HTMLResponse(content="<h1>載入頁面失敗</h1>", status_code=500)
+
+AUTH_KEY = os.getenv("DEEPL_AUTH_KEY")
+
 
 if __name__ == "__main__":
     import uvicorn
     message_id = 0
     mongo_db = connect_to_mongodb()
     db = mongo_db["database"]
+    translator = DeeplTranslator(AUTH_KEY)
+    mistral_api = MistralAPI(os.getenv("MISTRAL_API_KEY"))
     sessions_collection = db["sessions"]
     uvicorn.run(app, host="0.0.0.0", port=8765)
